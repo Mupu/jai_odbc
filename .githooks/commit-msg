@@ -1,0 +1,4 @@
+#!/bin/bash
+set -e # Abort on any error
+echo '################### COMMIT MESSAGE CHECK ###################'
+.githooks/commit-msg.d/conventional-commit-message.sh $1

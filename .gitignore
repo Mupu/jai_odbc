@@ -1,0 +1,31 @@
+#
+# Basic Whitelisting setup. https://www.howtogeek.com/devops/how-to-set-up-gitignore-as-a-whitelist/
+# Debug: git check-ignore -v filename
+#
+*
+!*/
+!/.gitignore
+
+#
+# Blacklist Subfolder Jai Files for now..
+#
+/*/**/*.jai
+
+#
+# Whitelist folders
+#
+!/.githooks/**
+!/sql_odbc/src/**
+
+#
+# Whitelist types
+#
+!/*.jai
+!/sql_odbc/*.jai
+
+#
+# Whitelist files
+#
+!/GIT_HOOKS*.bat
+!/LICENSE.md
+!/README.md

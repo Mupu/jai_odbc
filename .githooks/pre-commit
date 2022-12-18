@@ -1,0 +1,4 @@
+#!/bin/bash
+set -e # Abort on any error
+echo '################### NOCHECKIN CHECK ###################'
+.githooks/pre-commit.d/nocheckin.sh
