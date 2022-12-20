@@ -2,7 +2,8 @@
 #import "Basic"()(MEMORY_DEBUGGER=DEBUG);
 DEBUG_LIB:: #import "Debug";
 
-DEBUG:: true;
+DEBUG:: false;
+SQL_CONNECTION_STRING:: "Driver={SQL Server Native Client 11.0};Server=MUPU;Database=Test;Trusted_Connection=Yes;";
 
 //#import "Project_Generator";
 //#run Project_Generator.build(#file);
@@ -16,13 +17,22 @@ p:: (args: ..Any) {
     print("\n");
 }
 
+code_to_string:: (code: Code) -> string #expand {
+    PP      :: #import "Program_Print";
+    Compiler:: #import "Compiler";
+    code_node:= Compiler.compiler_get_nodes(code);
+    builder: String_Builder;
+    PP.print_expression(*builder, code_node);
+    return builder_to_string(*builder, allocator=temp);
+}
+
 // Inline debug printing
-TYPE_OF_CODE:: struct (c: Code) { T:: #run type_of(#insert c); }
-pi:: ($code: Code) -> TYPE_OF_CODE(code).T #expand 
-{
-    value:= #insert code;
-    p(value);
-    return value;
+pi:: ($code: Code, loc := #caller_location) -> code.type #expand {
+    String:: #import "String";
+    result:= #insert code;
+    filename:= String.path_filename(loc.fully_pathed_filename);
+    log("[%:%] % = %", filename, loc.line_number, #run code_to_string(code), result);
+    return result;
 }
 
 #run main();
@@ -52,7 +62,7 @@ main:: () {
 
         //push_context new_context 
         {
-            state, connection_success:= connect("Driver={SQL Server Native Client 11.0};Server=MUPU;Database=Test;Trusted_Connection=Yes;");
+            state, connection_success:= connect(SQL_CONNECTION_STRING);
             assert(connection_success);
             defer disconnect(*state);
             p(<<context.temporary_storage);
@@ -182,9 +192,9 @@ db_test:: () {
         return true;
     }
 
-    //s, success:= connect("Driver={SQL Server};Server=MUPU;Database=Test;Trusted_Connection=Yes;");
-    state, connection_success:= connect("Driver={SQL Server Native Client 11.0};Server=MUPU;Database=Test;Trusted_Connection=Yes;");
-    //s, success:= connect("Driver={ODBC Driver 18 for SQL Server};Server=MUPU;Database=Test;Trusted_Connection=Yes;TrustServerCertificate=yes;");
+    //s, success:= connect(SQL_CONNECTION_STRING);
+    state, connection_success:= connect(SQL_CONNECTION_STRING);
+    //s, success:= connect(SQL_CONNECTION_STRING);
     assert(connection_success);
     log("Connected\n\n");
 
@@ -981,7 +991,7 @@ query_test:: () {
     SQLAllocHandle(SQL_HANDLE_DBC, env, *dbc);
     /* Connect to the DSN mydsn */
     /* You will need to change mydsn to one you have created and tested */
-    ret = SQLDriverConnect(dbc, null, "Driver={SQL Server};Server=MUPU;Database=Test;Trusted_Connection=Yes;", SQL_NTS,
+    ret = SQLDriverConnect(dbc, null, SQL_CONNECTION_STRING, SQL_NTS,
                     null, 0, null, SQL_DRIVER_NOPROMPT);
     if !SQL_SUCCEEDED(ret) {
         extract_error(dbc, SQL_HANDLE_DBC);
@@ -1038,7 +1048,7 @@ connection_test:: () {
     SQLAllocHandle(SQL_HANDLE_DBC, env, *dbc);
     /* Connect to the DSN mydsn */
     /* You will need to change mydsn to one you have created and tested */
-    ret = SQLDriverConnect(dbc, null, "Driver={SQL Server};Server=MUPU;Database=Test;Trusted_Connection=Yes;", SQL_NTS,
+    ret = SQLDriverConnect(dbc, null, SQL_CONNECTION_STRING, SQL_NTS,
                     null, 0, null, SQL_DRIVER_NOPROMPT);
     if !SQL_SUCCEEDED(ret) {
         extract_error(dbc, SQL_HANDLE_DBC);
