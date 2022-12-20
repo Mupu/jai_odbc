@@ -3,7 +3,8 @@
 DEBUG_LIB:: #import "Debug";
 
 DEBUG:: false;
-SQL_CONNECTION_STRING:: "Driver={SQL Server Native Client 11.0};Server=MUPU;Database=Test;Trusted_Connection=Yes;";
+//SQL_CONNECTION_STRING:: "Driver={SQL Server Native Client 11.0};Server=MUPU;Database=Test;Trusted_Connection=Yes;";
+SQL_CONNECTION_STRING:: "Driver={ODBC Driver 18 for SQL Server};Server=MUPU;Database=Test;Trusted_Connection=Yes;TrustServerCertificate=yes;";
 
 //#import "Project_Generator";
 //#run Project_Generator.build(#file);

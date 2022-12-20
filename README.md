@@ -1,6 +1,6 @@
 <!-- https://github.com/fefong/markdown_readme/blob/master/README.md#Markdown-Editor -->
 # What is jai_odbc?
-Jai ODBC is a simple wrapper for ODBC, which exposes a simple API to make SQL requests and parse it's data into structs. Currently it has only been used and tested on Windows with MSSQL and the `SQL Server Native Client 11.0 Driver`. If you have any feedback, or improvements feel free to ping me on the Discord. If you wanna contribute take a look in the [Contribution](#contribution) section.
+Jai ODBC is a simple wrapper for ODBC, which exposes a simple API to make SQL requests and parse it's data into structs. Currently it has only been used and tested on Windows with MSSQL 2022 with the `SQL Server Native Client 11.0` and `ODBC Driver 18 for SQL Server` drivers. If you have any feedback, or improvements feel free to ping me on the Discord. If you wanna contribute take a look in the [Contribution](#contribution) section.
 
 # Installation
 You need at least Jai `version beta 0.1.049` or higher. Download the repository and import it with `#import "jai_odbc";`. 
