@@ -8,6 +8,9 @@ STRING_LIB:: #import "String"; // equal_nocase
 // Export "Pool". User needs to be able to call 'release'
 using,only(release) #import "Pool";
 
+// fix big strings
+// check ram usage with big strings and mention big string readme if thats happening
+
 // MAKE has_value better!!!!!!!!!!
 // TODO parameter counting
 // TODO does execute break when this function is called with context.allocator = temp?
@@ -76,7 +79,7 @@ Unkown_Result_Mode:: enum {
 
 //
 // Wrapper for 'execute' with the difference that it automatically 
-// frees the pool on end of scope(defer).
+// frees the result pool on end of scope(defer).
 //
 // For more information see notes for 'execute'.
 //
@@ -135,21 +138,32 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
     log("**** Running Query ****\nAt %\n", location_to_path(location), flags=.VERBOSE_ONLY);
     log("%\n", command, flags=.VERBOSE_ONLY);
 
+    // Used for the wide string conversions that are long and for small sprint calls.
+    temp_string_pool: Pool;
+	set_allocators(*temp_string_pool);
+    defer release(*temp_string_pool);
+
+    temp_string_allocator: Allocator;
+    temp_string_allocator.proc = pool_allocator_proc;
+    temp_string_allocator.data = *temp_string_pool;
+
+
     // Since the results usually have the same lifespan we use a Pool allocator
-    // NOTE: It has to be freed even if success is false. Since this function can return at any point on errors.
-    pool: Pool;
-	set_allocators(*pool);
-	push_allocator(pool_allocator_proc, *pool);
+    // NOTE: This is freed by the user. It has to be freed even if success is false. 
+    // Since this function can return at any point when encountering errors.
+    result_pool: Pool;
+	set_allocators(*result_pool);
 
+    result_pool_allocator: Allocator;
+    result_pool_allocator.proc = pool_allocator_proc;
+    result_pool_allocator.data = *result_pool;
 
-    results: [..] T;
-    has_value :[..] bool;
 
     REPORT_MAYBE_RETURN:: (handle: SQLHANDLE, handle_type: SQLSMALLINT, code: Code, library_call_location:= #caller_location) -> success: bool, return_code: SQLRETURN #expand {
         userspace_caller_location:= `location;
         success, return_code:= REPORT(handle, handle_type, code, userspace_caller_location, library_call_location);
         if !success {
-            `return false, pool, T.[], bool.[], 0;
+            `return false, result_pool, T.[], bool.[], 0;
         }
         return success, return_code;
     }
@@ -207,6 +221,9 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
     //
     // Bind Input Paramters
     //
+
+    // Indicators need to live until SQLExecuteDirect is called..
+    indicators:= NewArray(args.count, s64, allocator=temp);
     for arg, index: args {
         if arg.type.type == {
             case .INTEGER;
@@ -243,20 +260,22 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                         }
                     case;
                         log_error("Error at: %\nINTEGER of runtime size % not supported. Argument=%\n", location_to_path(location), info.runtime_size, index+1);
-                        return false, pool, T.[], bool.[], 0;
+                        return false, result_pool, T.[], bool.[], 0;
                 }
 
                 log("Bound INTEGER to parameter %, value=%, runtime_size=%, signed=%\n", index+1, arg, info.runtime_size, info.signed, flags=.VERY_VERBOSE_ONLY);
 
             case .STRING;
                 arg_casted:= <<cast(*string) arg.value_pointer;
-                // What if its a 2gb column? Maybe do smth else for huge columns?
-                string_wide, success, string_byte_length:= utf8_to_wide(arg_casted, allocator=context.allocator);
+                allocator:= ifx arg_casted.count > 2048 then temp_string_allocator else temp;
+                // Data needs to live until SQLExecute is called
+                string_wide, success, string_byte_length:= utf8_to_wide(arg_casted, allocator=allocator);
                 if !success {
-                    log_error("Error at: %\nUTF8 to wide conversion failed!?\n", location_to_path(location));
-                    return false, pool, T.[], bool.[], 0;
+                    log_error("Error at: %\nAt: %\nUTF8 to wide conversion failed!?\n", location_to_path(location), location_to_path(#location()));
+                    return false, result_pool, T.[], bool.[], 0;
                 }
-                REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLBindParameter(stmt, xx (index + 1), SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR, cast(u64) string_byte_length , 0, string_wide, string_byte_length, xx *string_byte_length));
+                indicators[index] = string_byte_length;
+                REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLBindParameter(stmt, xx (index + 1), SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR, cast(u64) string_byte_length , 0, string_wide, string_byte_length, *indicators[index]));
                 log("Bound STRING to parameter %, value='%'\n", index+1, arg_casted, flags=.VERY_VERBOSE_ONLY);
 
             case .FLOAT;
@@ -267,27 +286,30 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                     REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLBindParameter(stmt, xx (index + 1), SQL_PARAM_INPUT, SQL_C_DOUBLE, SQL_DOUBLE, 0, 0, arg.value_pointer, 0, null));
                 } else {
                     log_error("Error at: %\nFLOAT of runtime size % not supported. Argument=%\n", location_to_path(location), info.runtime_size, index+1);
-                    return false, pool, T.[], bool.[], 0;
+                    return false, result_pool, T.[], bool.[], 0;
                 }
                 log("Bound FLOAT to parameter %, value=%\n", index+1, arg, flags=.VERY_VERBOSE_ONLY);
             case .ARRAY;
                 info:= cast(*Type_Info_Array) arg.type;
                 if !(info.element_type.type == .INTEGER && info.element_type.runtime_size == 1) {
                     log_error("Error at: %\nOnly ARRAY of type 'u8' are supported. Argumet=%\n", location_to_path(location), index+1);
-                    return false, pool, T.[], bool.[], 0;
+                    return false, result_pool, T.[], bool.[], 0;
                 }
 
                 if info.array_type == .FIXED {
-                    // for fixed array value_pointer points to array.data
+                    // For fixed array value_pointer points to array.data. Also we are allowed to
+                    // do `*info.array_count`, because it is a constant value.
                     REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLBindParameter(stmt, xx (index + 1), SQL_PARAM_INPUT, SQL_C_BINARY, SQL_BINARY, xx info.array_count , 0, arg.value_pointer, info.array_count, *info.array_count));
                     log("Bound ARRAY to parameter %, array_type=FIXED, bytes=%\n", index+1, info.array_count, flags=.VERY_VERBOSE_ONLY);
                 } else if info.array_type == .RESIZABLE {
                     arg_casted:= cast(*[..] u8) arg.value_pointer;
-                    REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLBindParameter(stmt, xx (index + 1), SQL_PARAM_INPUT, SQL_C_BINARY, SQL_BINARY, xx arg_casted.count , 0, arg_casted.data, arg_casted.count, *arg_casted.count));
+                    indicators[index] = arg_casted.count;
+                    REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLBindParameter(stmt, xx (index + 1), SQL_PARAM_INPUT, SQL_C_BINARY, SQL_BINARY, xx arg_casted.count , 0, arg_casted.data, arg_casted.count, *indicators[index]));
                     log("Bound ARRAY to parameter %, array_type=RESIZABLE, bytes=%\n", index+1, arg_casted.count, flags=.VERY_VERBOSE_ONLY);
                 } else if info.array_type == .VIEW {
                     arg_casted:= cast(*[] u8) arg.value_pointer;
-                    REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLBindParameter(stmt, xx (index + 1), SQL_PARAM_INPUT, SQL_C_BINARY, SQL_BINARY, xx arg_casted.count , 0, arg_casted.data, arg_casted.count, *arg_casted.count));
+                    indicators[index] = arg_casted.count;
+                    REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLBindParameter(stmt, xx (index + 1), SQL_PARAM_INPUT, SQL_C_BINARY, SQL_BINARY, xx arg_casted.count , 0, arg_casted.data, arg_casted.count, *indicators[index]));
                     log("Bound ARRAY to parameter %, array_type=VIEW, bytes=%\n", index+1, arg_casted.count, flags=.VERY_VERBOSE_ONLY);
                 } 
             case .STRUCT;
@@ -299,7 +321,7 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                     log("Bound Apollo_Time to parameter %, value=% UTC\n", index+1, calendar_to_iso_string(calendar), flags=.VERY_VERBOSE_ONLY);
                 } else {
                     log_error("Error at: %\nSTRUCT of type '%' not supported. Argument=%\n", location_to_path(location), info.name, index+1);
-                    return false, pool, T.[], bool.[], 0;
+                    return false, result_pool, T.[], bool.[], 0;
                 }
             /*
             case .POINTER;
@@ -319,20 +341,26 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
             */
             case;
                 log_error("Error at: %\nType '%' not supported\n", location_to_path(location), arg.type.type);
-                return false, pool, T.[], bool.[], 0;
+                return false, result_pool, T.[], bool.[], 0;
         }
     }
 
     //
     // Execute
     //
-    command_wide, command_bool, command_byte_length:= utf8_to_wide(command);
+    command_wide, command_bool, command_byte_length:= utf8_to_wide(command, allocator=temp);
     if !command_bool {
-        log_error("Error at: %\nUTF8 to wide conversion failed!?\n", location_to_path(location));
-        return false, pool, T.[], bool.[], 0;
+        log_error("Error at: %\nAt: %\nUTF8 to wide conversion failed!?\n", location_to_path(location), location_to_path(#location()));
+        return false, result_pool, T.[], bool.[], 0;
     }
     REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLExecDirectW(stmt, command_wide, command_byte_length/2));
-    
+
+    // Free temp storage and temp_string_pool, since unicode strings could have used a lot.
+    // It should be save to do here, since SQLExcelDirectW uses all bound buffers and indicators of SQLBindParameters.
+    // https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/deferred-buffers?view=sql-server-ver16
+    set_temporary_storage_mark(temporary_storage_mark);
+    release(*temp_string_pool);
+
     //
     // Retrieve and parse the result's data
     //
@@ -344,15 +372,16 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
 
     log("Query Result: % columns, % modified rows\n", column_count, row_count, flags=.VERBOSE_ONLY);
 
-    if !column_count then return true, pool, T.[], bool.[], row_count; // no data to query
+    if !column_count then return true, result_pool, T.[], bool.[], row_count; // no data to query
+
+    results: [..] T;
+    results.allocator = result_pool_allocator;
+
+    has_value :[..] bool;
+    has_value.allocator = result_pool_allocator;
 
     indicator: int;
     while true { // For all rows in result set
-        // Free temp storage, since unicode strings could have used a lot.
-        // It should be save to do here, since SQLExcelDirectW uses all bound buffers of SQLBindParameters.
-        // https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/deferred-buffers?view=sql-server-ver16
-        set_temporary_storage_mark(temporary_storage_mark);
-
         temp_data: T; // Its in here so its get reset to defaults every row.
 
         // Fetch single row
@@ -380,7 +409,7 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                 if #complete ignore_unknown == {
                     case .CRASH;
                         log_error("Error at: %\nNo struct member with the name '%' was found.\n", location_to_path(location), column_c_name);
-                        return false, pool, T.[], bool.[], 0;
+                        return false, result_pool, T.[], bool.[], 0;
                     case .WARN;
                         log("No struct member with the name '%' was found, skipping..\n", column_c_name, flags=.WARNING);
                         continue;
@@ -430,7 +459,7 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                             }
                         case;
                             log_error("Error at: %\nInteger of runtime size % not supported. Member='%'\n", location_to_path(location), info.runtime_size, member.name);
-                            return false, pool, T.[], bool.[], 0;
+                            return false, result_pool, T.[], bool.[], 0;
                     }
                     array_add(*has_value, indicator != SQL_NULL_DATA);
                     log("Bound INTEGER result to struct member '%'. value=%, runtime_size=%, signed=%\n", member.name, member_value, info.runtime_size, info.signed, flags=.VERY_VERBOSE_ONLY);
@@ -444,7 +473,7 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                         if indicator == SQL_NO_TOTAL then assert(false, "SQL_NO_TOTAL not Implemented");
 
                         if indicator > 0 { // only if theres actually data
-                            <<member_string = alloc_string(indicator + 1); // null terminator
+                            <<member_string = alloc_string(indicator + 1, result_pool_allocator); // null terminator
                             REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLGetData(stmt, it, SQL_C_CHAR, member_string.data, member_string.count, *indicator)); // retrieve data
                             member_string.count -= 1; // null terminator
                         }
@@ -455,13 +484,14 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                         if indicator == SQL_NO_TOTAL then assert(false, "SQL_NO_TOTAL not Implemented");
 
                         if indicator > 0 { // only if theres actually data
-                            // What if its a 2gb column? Maybe do smth else for huge columns?
-                            temp_string:= talloc_string(indicator + 2); // null terminator
+                            allocator:= ifx indicator > 2048 then temp_string_allocator else temp;
+                            temp_string:= alloc_string(indicator + 2, allocator=allocator); // null terminator
                             success:= REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLGetData(stmt, it, SQL_C_WCHAR, temp_string.data, temp_string.count, *indicator)); // retrieve data
-                            <<member_string, success = wide_to_utf8(cast(*u16)temp_string.data, allocator=context.allocator);
+                            
+                            <<member_string, success = wide_to_utf8(cast(*u16)temp_string.data, allocator=result_pool_allocator);
                             if !success {
-                                log_error("Error at: %\nwide to utf8 conversion failed!?\n", location_to_path(location));
-                                return false, pool, T.[], bool.[], 0;
+                                log_error("Error at: %\nAt: %\nUTF8 to wide conversion failed!?\n", location_to_path(location), location_to_path(#location()));
+                                return false, result_pool, T.[], bool.[], 0;
                             }
                         }
 
@@ -471,20 +501,23 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                         SQLGetData(stmt, it, SQL_C_TYPE_TIMESTAMP, *timestamp, size_of(TIMESTAMP_STRUCT), *indicator);
                         <<member_string = sprint("%-%-%T%:%:%.%", timestamp.year, formatInt(timestamp.month, minimum_digits=2), 
                                 formatInt(timestamp.day, minimum_digits=2), formatInt(timestamp.hour, minimum_digits=2), 
-                                formatInt(timestamp.minute, minimum_digits=2), formatInt(timestamp.second, minimum_digits=2), timestamp.fraction);   
+                                formatInt(timestamp.minute, minimum_digits=2), formatInt(timestamp.second, minimum_digits=2), timestamp.fraction,
+                                result_allocator=result_pool_allocator, builder_allocator=temp);   
                     } else if sqltype_num == SQL_TYPE_DATE {
                         date: DATE_STRUCT;
                         SQLGetData(stmt, it, SQL_C_TYPE_DATE, *date, size_of(DATE_STRUCT), *indicator);
-                        <<member_string = sprint("%-%-%", date.year, formatInt(date.month, minimum_digits=2), formatInt(date.day, minimum_digits=2));
+                        <<member_string = sprint("%-%-%", date.year, formatInt(date.month, minimum_digits=2), formatInt(date.day, minimum_digits=2),
+                                                result_allocator=result_pool_allocator, builder_allocator=temp);   
                     } else if sqltype_num == -154 { // TIME. SQL_SS_TYPE_TIME2SQL ?
                         // TODO fractions?
                         time: TIME_STRUCT;
                         SQLGetData(stmt, it, SQL_C_TYPE_TIME, *time, size_of(TIME_STRUCT), *indicator);
-                        <<member_string = sprint("%:%:%", formatInt(time.hour, minimum_digits=2), formatInt(time.minute, minimum_digits=2), formatInt(time.second, minimum_digits=2));
+                        <<member_string = sprint("%:%:%", formatInt(time.hour, minimum_digits=2), formatInt(time.minute, minimum_digits=2), 
+                                                formatInt(time.second, minimum_digits=2), result_allocator=result_pool_allocator, builder_allocator=temp);   
                     } else {
                         log_error("Error at: %\nCan not convert '%' to '%'. Member='%' Column='%' sqlTypeNum=(%)\n", location_to_path(location), 
                                     to_string(sqltype_name), member.type.type, member.name, to_string(column_name), sqltype_num);
-                        return false, pool, T.[], bool.[], 0;
+                        return false, result_pool, T.[], bool.[], 0;
                     }
                     log("Bound STRING result to struct member '%'. value='%'\n", member.name, <<member_string, flags=.VERY_VERBOSE_ONLY);
                     log("Indicator was: %\n", indicator, flags=.VERY_VERBOSE_ONLY);
@@ -501,7 +534,7 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                         member_value = <<cast(*float64)member_pointer;
                     } else {
                         log_error("Error at: %\nFLOAT of runtime size % not supported. Member='%'", location_to_path(location), info.runtime_size, member.name);
-                        return false, pool, T.[], bool.[], 0;
+                        return false, result_pool, T.[], bool.[], 0;
                     }
                     log("Bound FLOAT result to struct member '%'. value=%, runtime_size=%\n", member.name, member_value, info.runtime_size, flags=.VERY_VERBOSE_ONLY);
                     array_add(*has_value, indicator != SQL_NULL_DATA);
@@ -510,7 +543,7 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                     info:= cast(*Type_Info_Array) member.type;
                     if !(info.element_type.type == .INTEGER && info.element_type.runtime_size == 1) {
                         log_error("Error at: %\nOnly u8 arrays are supported. Member='%'", location_to_path(location), member.name);
-                        return false, pool, T.[], bool.[], 0;
+                        return false, result_pool, T.[], bool.[], 0;
                     }
 
                     if  info.array_type == .FIXED { // inplace array
@@ -522,6 +555,7 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                         if indicator ==  SQL_NO_TOTAL then assert(false, "Not Implemented");
 
                         if indicator > 0 { // only if theres actually data
+                            member_array.allocator = result_pool_allocator;
                             array_reserve(member_array, indicator + 1); // null terminator
                             member_array.count = indicator;
                             REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLGetData(stmt, it, SQL_C_BINARY, member_array.data, member_array.allocated, *indicator)); // retrieve data
@@ -534,7 +568,7 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                         if indicator ==  SQL_NO_TOTAL then assert(false, "Not Implemented");
 
                         if indicator > 0 { // only if theres actually data
-                            <<member_array = NewArray(indicator + 1, u8, initialized=false); // null terminator
+                            <<member_array = NewArray(indicator + 1, u8, initialized=false, allocator=result_pool_allocator); // null terminator
                             member_array.count = indicator;
                             REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLGetData(stmt, it, SQL_C_BINARY, member_array.data, indicator+1, *indicator)); // retrieve data
                         }
@@ -578,11 +612,11 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
                             }
                         } else {
                             log_error("Error at: %\nConversion from sqltype '%' to struct '%' not supported. Column='%' SqlTypeNum=(%)\n", location_to_path(location), to_string(sqltype_name), info.name, to_string(column_name), sqltype_num);
-                            return false, pool, T.[], bool.[], 0;
+                            return false, result_pool, T.[], bool.[], 0;
                         }
                     } else {
                         log_error("Error at: %\nStruct-Type '%' not supported. Member='%'.\n", location_to_path(location), info.name, member.name);
-                        return false, pool, T.[], bool.[], 0;
+                        return false, result_pool, T.[], bool.[], 0;
                     }
                     log("Bound result (%) to '%'\n", info.type, member.name, flags=.VERY_VERBOSE_ONLY);
                     log("Indicator was: %\n", indicator, flags=.VERY_VERBOSE_ONLY);
@@ -590,18 +624,23 @@ execute:: (using connection: *DB_Connection, $T: Type, command: string, args: ..
 
                 case;
                     log_error("Error at: %\nType '%' not supported. Member='%'\n", location_to_path(location), member.type.type, member.name);
-                    return false, pool, T.[], bool.[], 0;
+                    return false, result_pool, T.[], bool.[], 0;
             }
         }
 
         log("Row Object: %\n", temp_data, flags=.VERY_VERBOSE_ONLY);
         array_add(*results, temp_data);
+
+        // Free for each column since it could have been 2GB that we free ..
+        set_temporary_storage_mark(temporary_storage_mark);
+        release(*temp_string_pool);
+
     }
 
     // Does this still have to unbound with SQLFreeStmt SQL_UNBIND or SQL_RESET_PARAMS ?
     REPORT_MAYBE_RETURN(stmt, SQL_HANDLE_STMT, SQLCloseCursor(stmt));
 
-    return true, pool, results, has_value, row_count;
+    return true, result_pool, results, has_value, row_count;
 }
 
 #scope_file
@@ -677,3 +716,12 @@ find_member:: inline ($T: Type, name: string) -> (success: bool, member: Type_In
     return found, member;
 }
 
+sprint:: (format_string: string, args: .. Any, result_allocator: Allocator, builder_allocator: Allocator) -> string #must {
+    push_allocator(builder_allocator);
+
+    builder: String_Builder;
+
+    print_to_builder(*builder, format_string, ..args);
+
+    return builder_to_string(*builder, allocator=result_allocator);
+} @PrintLike

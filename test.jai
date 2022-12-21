@@ -2,9 +2,11 @@
 #import "Basic"()(MEMORY_DEBUGGER=DEBUG);
 DEBUG_LIB:: #import "Debug";
 
-DEBUG:: false;
+DEBUG:: true;
 //SQL_CONNECTION_STRING:: "Driver={SQL Server Native Client 11.0};Server=MUPU;Database=Test;Trusted_Connection=Yes;";
 SQL_CONNECTION_STRING:: "Driver={ODBC Driver 18 for SQL Server};Server=MUPU;Database=Test;Trusted_Connection=Yes;TrustServerCertificate=yes;";
+
+#run main();
 
 //#import "Project_Generator";
 //#run Project_Generator.build(#file);
@@ -36,7 +38,27 @@ pi:: ($code: Code, loc := #caller_location) -> code.type #expand {
     return result;
 }
 
-#run main();
+Log_Allocator :: struct {
+    backing_allocator: Allocator;
+}
+
+make_log_allocator :: (backing_allocator: Allocator) -> Log_Allocator {
+    log: Log_Allocator;
+    log.backing_allocator = backing_allocator;
+    return log;
+}
+
+log_allocator :: (log: *Log_Allocator) -> Allocator {
+    return Allocator.{log_allocator_proc, log};
+}
+
+log_allocator_proc :: (mode: Allocator_Mode, size: s64, old_size: s64, old_memory_pointer: *void, allocator_data: *void) -> *void {
+    log := cast(*Log_Allocator)allocator_data;
+    print("[Log_Allocator] % bytes.\n", size);
+    print_stack_trace(context.stack_trace);
+    return log.backing_allocator.proc(mode, size, old_size, old_memory_pointer, log.backing_allocator.data);
+}
+
 main:: () {
     DEBUG_LIB.init();
     context.print_style.struct_printer = apollo_struct_printer;
@@ -55,45 +77,41 @@ main:: () {
     db_test();
 
 
-    if false
+    #if 0
     { 
+        state, connection_success:= connect(SQL_CONNECTION_STRING);
+        assert(connection_success);
+        defer disconnect(*state);
+
         p(<<context.temporary_storage);
-        new_context := context;  // Copy all values from Context.
-        new_context.allocator = temp;
 
-        //push_context new_context 
         {
-            state, connection_success:= connect(SQL_CONNECTION_STRING);
-            assert(connection_success);
-            defer disconnect(*state);
-            p(<<context.temporary_storage);
+            Dummy:: struct {
+                testVal: string;
+            }
+            size:= 1_000_000_000;
+            size =   100_000_000;
+            data:= alloc_string(size);
+            i:= 0;
+            DEBUG_LIB.breakpoint();
+            while i < size - 1 {
+                bytes_left_to_fill:= size - 1 - i;
+                p(1, i, bytes_left_to_fill);
+                if i == 0 then  { memcpy(data.data, "a".data, 1); i += 1;}
+                else            { memcpy(data.data + i, data.data, min(bytes_left_to_fill, i)); i += min(bytes_left_to_fill, i); } // double size
+ 
+                p(2, i, size - 1 - i);
 
-            if true
-            {
-                Dummy:: struct {
-                    testVal: string;
-                }
-                success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testString as testVal FROM Test; UPDATE Test SET testString = 'hi';");
-                defer release(*result_set_allocator);
-                assert(success);
+                if bytes_left_to_fill <= 0 then DEBUG_LIB.breakpoint();
             }
-            p(<<context.temporary_storage);
-            insertval:= u8.[4];
-            sqltype:= "testBinary";
-            jaitype:: [..] u8;
-            {
-                success, rows:= execute(*state, tprint("UPDATE Test SET % = ?;", sqltype), insertval);
-                assert(success);
-            }
-            {
-                Dummy:: struct {
-                    testVal: jaitype;
-                }
-                success, result_set_allocator, results, has_value, rows:= EXECUTE(*state, JaiTest, "SELECT testBinary, testDouble FROM [Test]");
-                assert(success);
-                p(results, has_value);
-            }
-            p(<<context.temporary_storage);
+            DEBUG_LIB.breakpoint();
+            //success, result_set_allocator, results, has_value, rows:= execute(*state, "UPDATE Test SET testStringNMax = ?", data);
+            success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testStringNMax as testVal FROM Test;");
+            defer release(*result_set_allocator);
+            W:: #import "Windows";
+            p("GetLastError:", W.GetLastError());
+            assert(success);
+            p(results[0].testVal.count);
         }
     }
 
