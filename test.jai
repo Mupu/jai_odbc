@@ -1,6 +1,7 @@
-#import,file "jai_odbc.jai";
+#import,file "jai_odbc.jai"(DEBUG=true);
 #import "Basic"()(MEMORY_DEBUGGER=DEBUG);
 DEBUG_LIB:: #import "Debug";
+#load "util.jai";
 
 DEBUG:: true;
 //SQL_CONNECTION_STRING:: "Driver={SQL Server Native Client 11.0};Server=MUPU;Database=Test;Trusted_Connection=Yes;";
@@ -11,54 +12,6 @@ SQL_CONNECTION_STRING:: "Driver={ODBC Driver 18 for SQL Server};Server=MUPU;Data
 //#import "Project_Generator";
 //#run Project_Generator.build(#file);
 
-// Fast and dirty debug printing
-p:: (args: ..Any) {
-    for args {
-        print("%", it);
-        if it_index != args.count-1 then print(", ");
-    }
-    print("\n");
-}
-
-code_to_string:: (code: Code) -> string #expand {
-    PP      :: #import "Program_Print";
-    Compiler:: #import "Compiler";
-    code_node:= Compiler.compiler_get_nodes(code);
-    builder: String_Builder;
-    PP.print_expression(*builder, code_node);
-    return builder_to_string(*builder, allocator=temp);
-}
-
-// Inline debug printing
-pi:: ($code: Code, loc := #caller_location) -> code.type #expand {
-    String:: #import "String";
-    result:= #insert code;
-    filename:= String.path_filename(loc.fully_pathed_filename);
-    log("[%:%] % = %", filename, loc.line_number, #run code_to_string(code), result);
-    return result;
-}
-
-Log_Allocator :: struct {
-    backing_allocator: Allocator;
-}
-
-make_log_allocator :: (backing_allocator: Allocator) -> Log_Allocator {
-    log: Log_Allocator;
-    log.backing_allocator = backing_allocator;
-    return log;
-}
-
-log_allocator :: (log: *Log_Allocator) -> Allocator {
-    return Allocator.{log_allocator_proc, log};
-}
-
-log_allocator_proc :: (mode: Allocator_Mode, size: s64, old_size: s64, old_memory_pointer: *void, allocator_data: *void) -> *void {
-    log := cast(*Log_Allocator)allocator_data;
-    print("[Log_Allocator] % bytes.\n", size);
-    print_stack_trace(context.stack_trace);
-    return log.backing_allocator.proc(mode, size, old_size, old_memory_pointer, log.backing_allocator.data);
-}
-
 main:: () {
     DEBUG_LIB.init();
     context.print_style.struct_printer = apollo_struct_printer;
@@ -67,52 +20,64 @@ main:: () {
     //context.log_level = .VERBOSE;
     //context.log_level = .NORMAL;
 
-    defer p(<<context.temporary_storage);
+    defer {
+        p(<<context.temporary_storage);
+        assert(context.temporary_storage.high_water_mark < context.temporary_storage.original_size);
+    }
     #if DEBUG defer report_memory_leaks();
 
-    query_driver();
-    querry_datasources();
-    connection_test();
-    query_test();
-    db_test();
-
-
-    #if 0
-    { 
+    #if 1
+    {
+        query_driver();
+        querry_datasources();
+        connection_test();
+        db_test(); // actual tests in here for now
+    } else { 
         state, connection_success:= connect(SQL_CONNECTION_STRING);
         assert(connection_success);
         defer disconnect(*state);
 
         p(<<context.temporary_storage);
 
-        {
+        //context.allocator = log_allocator(*make_log_allocator(context.allocator));
+
+        #if 1 {
             Dummy:: struct {
                 testVal: string;
             }
+            p("sleep1"); sleep_milliseconds(2000);
+
+            //success, data_to_free, results, has_value, rows:= execute(*state, "UPDATE Test SET testStringNMax = ?; WHERE testString IS NOT NULL", data);
+            success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testStringNMax as testVal FROM Test WHERE testString IS NOT NULL");
+            assert(success);
+            W:: #import "Windows";
+            p("GetLastError:", W.GetLastError());
+            p("String size:", results[0].testVal.count);
+
+            p("sleep2"); sleep_milliseconds(5000);
+            release(*data_to_free);
+
+        }
+
+        #if 1 {
             size:= 1_000_000_000;
-            size =   100_000_000;
+            size =   1_000_000;
             data:= alloc_string(size);
+            defer free(data);
             i:= 0;
-            DEBUG_LIB.breakpoint();
             while i < size - 1 {
                 bytes_left_to_fill:= size - 1 - i;
-                p(1, i, bytes_left_to_fill);
                 if i == 0 then  { memcpy(data.data, "a".data, 1); i += 1;}
                 else            { memcpy(data.data + i, data.data, min(bytes_left_to_fill, i)); i += min(bytes_left_to_fill, i); } // double size
- 
-                p(2, i, size - 1 - i);
+
+                //p(i, size - 1 - i);
 
                 if bytes_left_to_fill <= 0 then DEBUG_LIB.breakpoint();
             }
-            DEBUG_LIB.breakpoint();
-            //success, result_set_allocator, results, has_value, rows:= execute(*state, "UPDATE Test SET testStringNMax = ?", data);
-            success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testStringNMax as testVal FROM Test;");
-            defer release(*result_set_allocator);
-            W:: #import "Windows";
-            p("GetLastError:", W.GetLastError());
-            assert(success);
-            p(results[0].testVal.count);
-        }
+            p("sleep3"); sleep_milliseconds(3000);
+            success, rows:= execute(*state, "UPDATE Test SET testStringNMax = ? WHERE testString IS NOT NULL", data);
+            p("sleep4"); sleep_milliseconds(5000);
+        }           
     }
 
 }
@@ -211,9 +176,7 @@ db_test:: () {
         return true;
     }
 
-    //s, success:= connect(SQL_CONNECTION_STRING);
     state, connection_success:= connect(SQL_CONNECTION_STRING);
-    //s, success:= connect(SQL_CONNECTION_STRING);
     assert(connection_success);
     log("Connected\n\n");
 
@@ -288,8 +251,8 @@ db_test:: () {
     {
         setup_table(state);
         {
-            success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT * FROM [Test] where testString is not null");
-            defer release(*result_set_allocator);
+            success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT * FROM [Test] where testString is not null");
+            defer release(*data_to_free);
             assert(success);
             assert(rows == 0);
             assert(results.count == 1, "Was %", results.count);
@@ -320,8 +283,8 @@ db_test:: () {
         }
 
         {
-            success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT * FROM [Test] where testString is null");
-            defer release(*result_set_allocator);
+            success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT * FROM [Test] where testString is null");
+            defer release(*data_to_free);
             assert(success);
             assert(rows == 0);
             assert(results.count == 1);
@@ -338,7 +301,7 @@ db_test:: () {
         {
             setup_table(state);
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, #string DONE 
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, #string DONE 
                     UPDATE [Test] SET [testString] = null
                     ,[testStringN] = null
                     ,[testStringMax] = null
@@ -356,15 +319,15 @@ db_test:: () {
                     ,[testSmallDateTime] = null
                     WHERE testString = '0123456789'
                 DONE);
-                defer release(*result_set_allocator);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
 
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT TOP 1 * FROM [Test]");
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT TOP 1 * FROM [Test]");
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
 
@@ -377,15 +340,15 @@ db_test:: () {
             setup_table(state);
             var:= "working";
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testString = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testString = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testString FROM [Test] WHERE testString = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testString FROM [Test] WHERE testString = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -400,15 +363,15 @@ db_test:: () {
             setup_table(state);
             var:= "画";
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringN = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringN = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringN FROM [Test] WHERE testStringN = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringN FROM [Test] WHERE testStringN = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -418,49 +381,49 @@ db_test:: () {
             }
         }
         
-        // varchar(Max)
+        // varchar(Max) @fix :LongStringInput
         {
             setup_table(state);
             var:= "working";
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringMax = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringMax = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringMax FROM [Test] WHERE testStringMax = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringMax FROM [Test] WHERE testStringMax = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
                 for has_value assert(it);
                 result:= results[0].testStringMax;
-                assert(result == var, "\nGot     :%\nExpected:%", result, var);
+                assert(result == var);
             }
         }
 
-        // nvarchar(Max)
+        // nvarchar(Max) @fix :LongStringInput
         {
             setup_table(state);
             var:= "画";
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringNMax = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringNMax = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringNMax FROM [Test] WHERE testStringNMax = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringNMax FROM [Test] WHERE testStringNMax = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
                 for has_value assert(it);
                 result:= results[0].testStringNMax;
-                assert(result == var, "\nGot     :%\nExpected:%", result, var);
+                assert(result == var);
             }
         }
 
@@ -469,15 +432,15 @@ db_test:: () {
             setup_table(state);
             var:= "working   ";
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringC = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringC = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringC FROM [Test] WHERE testStringC = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringC FROM [Test] WHERE testStringC = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -492,15 +455,15 @@ db_test:: () {
             setup_table(state);
             var:= "画         ";
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringNC = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testStringNC = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringNC FROM [Test] WHERE testStringNC = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testStringNC FROM [Test] WHERE testStringNC = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -515,15 +478,15 @@ db_test:: () {
             setup_table(state);
             var :s32= -255;
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testInt = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testInt = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testInt FROM [Test] WHERE testInt = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testInt FROM [Test] WHERE testInt = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -538,15 +501,15 @@ db_test:: () {
             setup_table(state);
             var:= 42.42;
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testFloat = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testFloat = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testFloat FROM [Test] WHERE testFloat = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testFloat FROM [Test] WHERE testFloat = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -561,15 +524,15 @@ db_test:: () {
             setup_table(state);
             var:= 42.8888888888888888888;
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testDouble = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testDouble = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testDouble FROM [Test] WHERE testDouble = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testDouble FROM [Test] WHERE testDouble = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -589,15 +552,15 @@ db_test:: () {
                 setup_table(state);
                 var:= u8.[4,2,0,0,0,0,0,1];
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testBinary = ? WHERE testString IS NULL", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testBinary = ? WHERE testString IS NULL", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 1);
                     for has_value assert(!it);
                 }
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testBinary FROM [Test] WHERE testBinary = ?", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testBinary FROM [Test] WHERE testBinary = ?", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 0);
                     assert(results.count == 1);
@@ -620,15 +583,15 @@ db_test:: () {
                 var[7] = 2;
                 
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testBinary = ? WHERE testString IS NULL", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testBinary = ? WHERE testString IS NULL", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 1);
                     for has_value assert(!it);
                 }
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testBinary FROM [Test] WHERE testBinary = ?", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testBinary FROM [Test] WHERE testBinary = ?", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 0);
                     assert(results.count == 1);
@@ -648,15 +611,15 @@ db_test:: () {
                 array_add(*var, 4, 1, 0, 0, 0, 0, 0, 3);
                 defer array_free(var);
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testBinary = ? WHERE testString IS NULL", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testBinary = ? WHERE testString IS NULL", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 1);
                     for has_value assert(!it);
                 }
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testBinary FROM [Test] WHERE testBinary = ?", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testBinary FROM [Test] WHERE testBinary = ?", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 0);
                     assert(results.count == 1);
@@ -677,15 +640,15 @@ db_test:: () {
                 setup_table(state);
                 var:= u8.[4,2,0,0,0,0,0,1];
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testVarBinary = ? WHERE testString IS NULL", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testVarBinary = ? WHERE testString IS NULL", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 1);
                     for has_value assert(!it);
                 }
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testVarBinary FROM [Test] WHERE testVarBinary = ?", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testVarBinary FROM [Test] WHERE testVarBinary = ?", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 0);
                     assert(results.count == 1);
@@ -708,15 +671,15 @@ db_test:: () {
                 var[7] = 2;
                 
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testVarBinary = ? WHERE testString IS NULL", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testVarBinary = ? WHERE testString IS NULL", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 1);
                     for has_value assert(!it);
                 }
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testVarBinary FROM [Test] WHERE testVarBinary = ?", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testVarBinary FROM [Test] WHERE testVarBinary = ?", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 0);
                     assert(results.count == 1);
@@ -736,15 +699,15 @@ db_test:: () {
                 array_add(*var, 4, 1, 0, 0, 0, 0, 0, 3);
                 defer array_free(var);
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testVarBinary = ? WHERE testString IS NULL", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testVarBinary = ? WHERE testString IS NULL", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 1);
                     for has_value assert(!it);
                 }
                 {
-                    success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testVarBinary FROM [Test] WHERE testVarBinary = ?", var);
-                    defer release(*result_set_allocator);
+                    success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testVarBinary FROM [Test] WHERE testVarBinary = ?", var);
+                    defer release(*data_to_free);
                     assert(success);
                     assert(rows == 0);
                     assert(results.count == 1);
@@ -765,15 +728,15 @@ db_test:: () {
             calendar : Calendar_Time = .{2022, 11, 17, 0, 0, 0, 0, 0, 0};
             var:= calendar_to_apollo(calendar);
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testDate = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testDate = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testDate FROM [Test] WHERE testDate = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testDate FROM [Test] WHERE testDate = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -792,15 +755,15 @@ db_test:: () {
             calendar : Calendar_Time = .{2022, 6, 4, 0, 0, 0, 0, 0, 0};
             var:= calendar_to_apollo(calendar);
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testDate = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testDate = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testDate FROM [Test] WHERE testDate = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testDate FROM [Test] WHERE testDate = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -823,15 +786,15 @@ db_test:: () {
             calendar.second =  30;
             var:= calendar_to_apollo(calendar);
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testTime = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testTime = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testTime FROM [Test] WHERE testTime = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testTime FROM [Test] WHERE testTime = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -853,15 +816,15 @@ db_test:: () {
             calendar.second =  7;
             var:= calendar_to_apollo(calendar);
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testTime = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testTime = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testTime FROM [Test] WHERE testTime = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testTime FROM [Test] WHERE testTime = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -881,15 +844,15 @@ db_test:: () {
             calendar : Calendar_Time = .{2042, 10, 15, 0, 17, 17, 17, 660, 0};
             var:= calendar_to_apollo(calendar);
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testDateTime = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testDateTime = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testDateTime FROM [Test] WHERE testDateTime = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testDateTime FROM [Test] WHERE testDateTime = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -909,15 +872,15 @@ db_test:: () {
 
             var:= calendar_to_apollo(calendar);
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testDateTime = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testDateTime = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testDateTime FROM [Test] WHERE testDateTime = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testDateTime FROM [Test] WHERE testDateTime = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -937,15 +900,15 @@ db_test:: () {
             calendar : Calendar_Time = .{2060, 5, 2, 0, 6, 6, 0, 0, 0};
             var:= calendar_to_apollo(calendar);
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testSmallDateTime = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "UPDATE [Test] SET testSmallDateTime = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, JaiTest, "SELECT testSmallDateTime FROM [Test] WHERE testSmallDateTime = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, JaiTest, "SELECT testSmallDateTime FROM [Test] WHERE testSmallDateTime = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(rows == 0);
                 assert(results.count == 1);
@@ -964,16 +927,16 @@ db_test:: () {
             calendar : Calendar_Time = .{2061, 5, 2, 0, 7, 7, 7, 760, 0};
             var:= calendar_to_apollo(calendar);
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testSmallDateTime = ? WHERE testString IS NULL", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "UPDATE [Test] SET testSmallDateTime = ? WHERE testString IS NULL", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(success);
                 assert(rows == 1);
                 for has_value assert(!it);
             }
             {
-                success, result_set_allocator, results, has_value, rows:= execute(*state, Dummy, "SELECT testSmallDateTime FROM [Test] WHERE testSmallDateTime = ?", var);
-                defer release(*result_set_allocator);
+                success, data_to_free, results, has_value, rows:= execute(*state, Dummy, "SELECT testSmallDateTime FROM [Test] WHERE testSmallDateTime = ?", var);
+                defer release(*data_to_free);
                 assert(success);
                 assert(success);
                 assert(rows == 0);
@@ -992,64 +955,8 @@ db_test:: () {
 
 
 //
-// Code below is not updated to match style of READEME
+// Code below is not updated to match style of READEME an outdated
 //
-
-query_test:: () {
-    print("####### TEST QUERY ######\n");
-    env: SQLHENV;
-    dbc: SQLHDBC;
-    stmt: SQLHSTMT;
-    ret: SQLRETURN; /* ODBC API return status */
-
-    /* Allocate an environment handle */
-    SQLAllocHandle(SQL_HANDLE_ENV, xx SQL_NULL_HANDLE, *env);
-    /* We want ODBC 3 support */
-    SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, cast(*void) SQL_OV_ODBC3, 0);
-    /* Allocate a connection handle */
-    SQLAllocHandle(SQL_HANDLE_DBC, env, *dbc);
-    /* Connect to the DSN mydsn */
-    /* You will need to change mydsn to one you have created and tested */
-    ret = SQLDriverConnect(dbc, null, SQL_CONNECTION_STRING, SQL_NTS,
-                    null, 0, null, SQL_DRIVER_NOPROMPT);
-    if !SQL_SUCCEEDED(ret) {
-        extract_error(dbc, SQL_HANDLE_DBC);
-        return;
-    }
-    /* Allocate a statement handle */
-    SQLAllocHandle(SQL_HANDLE_STMT, dbc, *stmt);
-
-    /* Retrieve a list of tables */
-    //SQLTables(stmt, null, 0, null, 0, null, 0, "TABLE", SQL_NTS);
-    ret = SQLExecDirect(stmt, "SELECT [testString],[testInt] FROM [Test]", SQL_NTS);
-    if (!ret) then extract_error(stmt, SQL_HANDLE_STMT);
-
-    columns: SQLSMALLINT; /* number of columns in result-set */
-    row:= 0;
-    /* How many columns are there */
-    SQLNumResultCols(stmt, *columns);
-    /* Loop through the rows in the result-set */
-    while SQL_SUCCEEDED(ret) {
-        ret = SQLFetch(stmt);
-        print("Row %\n", row);
-        row += 1;
-        /* Loop through the columns */
-        i : SQLUSMALLINT = 1;
-        for i..cast(u16)columns {
-            indicator: SQLLEN;
-            buf: [512] u8;
-            /* retrieve column data as a string */
-            ret = SQLGetData(stmt, it, SQL_C_CHAR,
-                            buf.data, buf.count, *indicator);
-            if (SQL_SUCCEEDED(ret)) {
-                /* Handle null columns */
-                if (indicator == SQL_NULL_DATA) memcpy(buf.data, "NULL".data, 5);
-                print("  Column % : %\n", it, to_string(buf.data));
-            }
-        }
-    }
-}
-
 connection_test:: () {
     print("####### TEST ######\n");
     env: SQLHENV;
