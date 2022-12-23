@@ -1,11 +1,34 @@
 <!-- https://github.com/fefong/markdown_readme/blob/master/README.md#Markdown-Editor -->
+# Table of Contents
+1. [What is Jai ODBC](#what-is-jai_odbc)
+2. [Installation](#installation)
+3. [Features](#features)
+    1. [Supported Conversions](#supported-conversions)
+    2. [Missing Features](#missing-features)
+4. [Known Problems](#known-problems)
+5. [Important Information](#important-information)
+6. [API](#api)
+7. [Examples](#examples)
+8. [Contribution](#contribution)
+    1. [Guidelines](#guidelines)
+    2. [Markers](#markers)
+    3. [Code Style and Conventions](#code-style-and-conventions)
+9. [Tooling](#tooling)
+    1. [Custom Git Hooks](#custom-git-hooks)
+10. [ToDo](#todo)
+11. [License](#license)
+
 # What is jai_odbc?
 Jai ODBC is a simple wrapper for ODBC, which exposes a simple API to make SQL requests and parse it's data into structs. Currently it has only been used and tested on Windows with MSSQL 2022 with the `SQL Server Native Client 11.0` and `ODBC Driver 18 for SQL Server` drivers. If you have any feedback, or improvements feel free to ping me on the Discord. If you want to contribute take a look in the [Contribution](#contribution) section.
 
 # Installation
-You need at least Jai `version beta 0.1.049` or higher. Download the repository and import it with `#import "jai_odbc";`. Also make sure to read [Important Information](#important-information).
+You need at least Jai `version beta 0.1.049` or higher. Download the repository and import it with `#import "jai_odbc"`. Also make sure to read [Important Information](#important-information) and to look at the [examples](#examples).
 
 # Features
+Jai ODBC lets you define a struct to which the results will be mapped. Currently the mapping is a 1 to 1 mapping between the StructMemberName and the returned columnnames. After that you just call the API, pass it the type, the query, and the arguments. NOTE: Youre supposed to pass the arguments by making use of parameterized queries. It will also prevent you from accidentilly creating SQL injection. 
+<br>The API is super convienent to use and saves you from having to write any table-to-structure-binding boilerplate code, like you have to in C/Cpp. Currently, the [API](#api) is super small and minimalistic. But it may be expanded in the future. 
+<br>A list of supported types and conversions can be found below. Examples can found [here](#examples).
+
 ## Supported Conversions
 - :heavy_check_mark: means bidirectional
 - :arrow_up: means from the left(Jai) convertable to the top(SQL)
@@ -25,6 +48,15 @@ You need at least Jai `version beta 0.1.049` or higher. Download the repository 
 * `SQLInteger` includes the types `TINYINT`, `SMALLINT`, `INT`, `BIGINT`
 * `SQLFloat` only the default one without the bit specifier was tested.
 
+## Missing Features
+* Transaction management
+* Expand API e.g. INSERT/UPDATE with Structs or AoS directly etc.
+* Multithreading?
+* Reconnecting?
+* Column name alias? It can already be achieved with `AS` statement in sql ..
+* Maybe more type conversions
+* Linux support?
+
 # Known Problems
 * Dont use the `SQL Server` Driver as it seems to break some functionality.
 * Not sure, if full unsigned range works. Although the documentation mentions unsigned integer ranges, MSSQL doesn't seem to support them?. If anyone knows more about this, please contact me. They probably don't work with the full range. Be warned. :IntegerTests
@@ -33,24 +65,6 @@ You need at least Jai `version beta 0.1.049` or higher. Download the repository 
 
 # Important Information
 * It is not adviced to push any allocator, that does not support free and resize. It is especially important when querying long (> 8000 bytes) `nvarchar(max)` strings. The reason beeing, that we have to convert from UTF-16 to UTF-8. 
-
-# TODO
-## Missing Features
-* Transaction management
-* Multithreading?
-* Reconnecting?
-* Column name alias
-* Maybe more type conversions
-
-## Work
-* @fix :LongStringInput
-* :utf8Conversion
-* @incomplete POOL_ALLOCATOR_CUTOFF_SIZE. Give user option to change the buffer sizes? :UserOptions
-* @incomplete :SQL_NO_TOTAL
-* @investigate: does execute break when this function is called with context.allocator = temp?
-* parameter counting / checking
-* Improve NULL checking
-* More tests. For all integer types and long binary/strings. And conversions. :IntegerTests :LongStringInput
 
 # API
 * `connect:: (conn_str: string, location:= #caller_location) ->  (state: DB_Connection #must, success: bool)`<br>
@@ -78,18 +92,19 @@ Wrapper for `execute` with the difference that it automatically frees the result
  More Tests and a better way to write them
 
 # Examples
-For more examples you can look at `db_test` in [Tests](https://github.com/Mupu/jai_odbc/blob/main/test.jai).
+For more examples, especially for the usage of different types, you can look at `db_test` in [Tests](https://github.com/Mupu/jai_odbc/blob/main/test.jai).
 ```c
 // Try to connect to the database.
 state, connection_success:= connect("Driver={ODBC Driver 18 for SQL Server};Server=MUPU;Database=Test;Trusted_Connection=Yes;");
 assert(connection_success);
-defer disconnect(*state); // Disconnect later on
+defer disconnect(*state); // Disconnect later on, EVEN on failure! Although, the assert saves us in this case anyways.
 
 {
     // Create struct which the result will map to.
     Dummy:: struct {
         testVal: string; // Has to match the sql column's name.
     }
+
     // Until there is column aliasing, you can rename the columns in the query to match the struct.
     // NOTE: for Data Query statements modified_rows should always be 0. So here, you could ignore it.
     success, data_to_free, results, has_value, modified_rows:= execute(*state, Dummy, "SELECT testString as testVal FROM Test");
@@ -136,7 +151,7 @@ defer disconnect(*state); // Disconnect later on
 If you wanna contribute, feel free to make a pull request or open issues. If you do so, please name your commits as specified in [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and/or use the githooks(See: [Tooling](#custom-git-hooks)) to enforce it.
 
 ## Markers
-If you wanna mark specific things to find later or that belong together, but are in different places, you can mark them by doing `:TAG`. Also you can use the following common annotations:
+If you wanna mark specific things to find later or that belong together, but are in different places, you can mark them by doing `:MyCoolTag`. Also you can use the following common annotations:
 * `@todo`        - Selfexplanitory.
 * `@incomplete`  - When something is not complete.
 * `@cleanup`     - When something can be cleaned up or be refactored.
@@ -149,7 +164,7 @@ If you wanna mark specific things to find later or that belong together, but are
 * `NOTE:`        - If you want to mention something more important in a text.
 * `WARNING:`     - If you want to warn about something important, that e.g. you need to know to use something.
 
-## Code Style & Conventions
+## Code Style and Conventions
 For this project I have decided to try a new style. Also we will use snake case. Please try to follow this example when commiting code.
 ```c
 
@@ -241,14 +256,26 @@ blub:: (a:= 5, loc:= #caller_location) {} // no space
 
 
 # Tooling
+No tooling needed other than the Jai compiler :)<br> But it is recommended to use the githooks.
 ## Custom Git Hooks
 To install them simply run `GIT_HOOKS_UNINSTALL.bat` after cloning.
-To uninstall them run `GIT_HOOKS_UNINSTALL.bat`. 
-<br>Currently distributed hooks are..
+To uninstall them run `GIT_HOOKS_UNINSTALL.bat`. NOTE: At least for me the hooks completely break after I modified/opened the script. If thats the case for you aswell, just redownload them.
+<br><br>Currently distributed hooks are..
   - .. `nocheckin` - prevents commits that include the keyword **nocheckin**. So, whenever you want to 
       not forget, that you added/changed something temporarily, just add **nocheckin** anywhere. 
-  - ..`conventional-commit-message` - prevents commits that don't follow the 
+  - .. `conventional-commit-message` - prevents commits that don't follow the 
       [Conventional Commits](https://www.conventionalcommits.org/) formatting.
+
+# TODO
+This list is more or less for me, but also for contributors. Generally, the top is a higher priority, but not strictly.
+* @fix :LongStringInput
+* :utf8Conversion
+* @incomplete POOL_ALLOCATOR_CUTOFF_SIZE. Give user option to change the buffer sizes? :UserOptions
+* @incomplete :SQL_NO_TOTAL
+* @investigate: does execute break when this function is called with context.allocator = temp?
+* parameter counting / checking
+* Improve NULL checking
+* More tests. For all integer types and long binary/strings. And conversions. :IntegerTests :LongStringInput
 
 # License
 This project is licensed under the BSD 3-Clause License. See [LICENSE.md](https://github.com/Mupu/jai_odbc/blob/main/LICENSE.md).
