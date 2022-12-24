@@ -19,7 +19,7 @@
 11. [License](#license)
 
 # What is jai_odbc?
-Jai ODBC is a simple wrapper for ODBC, which exposes a simple API to make SQL requests and parse it's data into structs. Currently it has only been used and tested on Windows with MSSQL 2022 with the `SQL Server Native Client 11.0` and `ODBC Driver 18 for SQL Server` drivers. If you have any feedback, or improvements feel free to ping me on the Discord. If you want to contribute take a look in the [Contribution](#contribution) section.
+Jai ODBC is a simple wrapper for ODBC, which exposes a simple API to make SQL requests and parse it's data into structs. Currently it has only been used and tested on Windows with MSSQL 2022 with the `SQL Server Native Client 11.0`, `ODBC Driver 17 for SQL Server`, and `ODBC Driver 18 for SQL Server` drivers. If you have any feedback, or improvements feel free to ping me on the Discord. If you want to contribute take a look in the [Contribution](#contribution) section.
 
 # Installation
 You need at least Jai `version beta 0.1.049` or higher. Download the repository and import it with `#import "jai_odbc"`. Also make sure to read [Important Information](#important-information) and to look at the [examples](#examples).
@@ -49,6 +49,8 @@ Jai ODBC lets you define a struct to which the results will be mapped. Currently
 * `SQLFloat` only the default one without the bit specifier was tested.
 
 ## Missing Features
+* ENUM support without casting
+* Do we want pointers to be a thing? Seems not worth.
 * Transaction management
 * Expand API e.g. INSERT/UPDATE with Structs or AoS directly etc.
 * Multithreading?
