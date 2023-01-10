@@ -19,20 +19,20 @@
 11. [License](#license)
 
 # What is jai_odbc?
-Jai ODBC is a simple wrapper for ODBC, which exposes a simple API to make SQL requests and parse it's data into structs. Currently it has only been used and tested on Windows with MSSQL 2022 with the `SQL Server Native Client 11.0`, `ODBC Driver 17 for SQL Server`, and `ODBC Driver 18 for SQL Server` drivers. If you have any feedback, or improvements feel free to ping me on the Discord. If you want to contribute take a look in the [Contribution](#contribution) section.
+Jai ODBC is a wrapper for ODBC, which exposes a simple API to make SQL requests and parse it's data into structs. Currently it has only been used and tested on Windows with MSSQL 2022 with the `SQL Server Native Client 11.0`, `ODBC Driver 17 for SQL Server`, and `ODBC Driver 18 for SQL Server` drivers. If you have any feedback, or improvements feel free to ping me on the Discord. If you want to contribute take a look in the [Contribution](#contribution) section.
 
 # Installation
 You need at least Jai `version beta 0.1.049` or higher. Download the repository and import it with `#import "jai_odbc"`. Also make sure to read [Important Information](#important-information) and to look at the [examples](#examples).
 
 # Features
-Jai ODBC lets you define a struct to which the results will be mapped. Currently the mapping is a 1 to 1 mapping between the StructMemberName and the returned columnnames. After that you just call the API, pass it the type, the query, and the arguments. NOTE: Youre supposed to pass the arguments by making use of parameterized queries. It will also prevent you from accidentilly creating SQL injection. 
+Jai ODBC lets you define a struct to which the results will be mapped. Currently the mapping is a 1 to 1 mapping between the StructMemberName and the returned columnnames. After that you just call the API, pass it the type, the query, and the arguments. NOTE: Youre supposed to pass the arguments by making use of parameterized queries. It will also prevent you from accidentally creating SQL injection. 
 <br>The API is super convienent to use and saves you from having to write any table-to-structure-binding boilerplate code, like you have to in C/Cpp. Currently, the [API](#api) is super small and minimalistic. But it may be expanded in the future. 
 <br>A list of supported types and conversions can be found below. Examples can found [here](#examples).
 
 ## Supported Conversions
 - :heavy_check_mark: means bidirectional
 - :arrow_up: means from the left(Jai) convertable to the top(SQL)
-- :a:arrow_left:: means from the top(SQL) convertable to the left(Jai) 
+- :arrow_left:: means from the top(SQL) convertable to the left(Jai) 
 - :x: means not supported
 
 |x             |SQLString         |SQLInteger        |Real & SQLFloat   |SQLBinary         |Date/Time         |
@@ -49,9 +49,11 @@ Jai ODBC lets you define a struct to which the results will be mapped. Currently
 * `SQLFloat` only the default one without the bit specifier was tested.
 
 ## Missing Features
-* ENUM support without casting
-* Do we want pointers to be a thing? Seems not worth.
 * Transaction management
+* Give option to query single rows instead of full dataset
+* ENUM support without casting
+* get_columns by name, without parsing it into a struct?
+* Do we want pointers to be a thing? Seems not worth.
 * Expand API e.g. INSERT/UPDATE with Structs or AoS directly etc.
 * Multithreading?
 * Reconnecting?
@@ -107,7 +109,7 @@ defer disconnect(*state); // Disconnect later on, EVEN on failure! Although, the
         testVal: string; // Has to match the sql column's name.
     }
 
-    // Until there is column aliasing, you can rename the columns in the query to match the struct.
+    // Until there is column aliasing, you can rename the columns in the query to match the structs member.
     // NOTE: for Data Query statements modified_rows should always be 0. So here, you could ignore it.
     success, data_to_free, results, has_value, modified_rows:= execute(*state, Dummy, "SELECT testString as testVal FROM Test");
     defer release(*data_to_free); // Free when done.
@@ -187,16 +189,16 @@ For this project I have decided to try a new style. Also we will use snake case.
 
 #import "Basic"; // imports and loads on top
 #load "file.jai"; // imports and loads on top
-DEBUG:: #import "Debug"; // no space, constants in capital latters
+DEBUG:: #import "Debug"; // no space, constants in capital letters
 
-// Types have capital first latters
+// Types have capital first letters
 Unkown_Result_Mode:: enum {
     CRASH; // enum and enum_flags are capitalized
     WARN;
     SILENT;
 }
 
-// Types have capital first latters
+// Types have capital first letters
 Dummy_Thing:: struct { // brackets same line, no space between 'test1' and '::'
     decleration: int; // ':' go to identifier
     decleration_with_default: int = 5;
@@ -231,7 +233,7 @@ test2:: (text: string) -> (multiple: bool, return_values: *int #must) {
 
     b_exists:= text.count > 0; // DONT prefix with types or whatever
 
-    prefixed_text:= tprint("HAHA: %\n", text); // always name variables smth usefull. And do not abbriviate.
+    prefixed_text:= tprint("HAHA: %\n", text); // always name variables something usefull. And do not abbriviate.
     for value: 1..8 { // you can use 'it' though. just name it if its a bigger function so you dont have to scroll
         if value == {
             case 1; return....
@@ -271,12 +273,13 @@ To uninstall them run `GIT_HOOKS_UNINSTALL.bat`. NOTE: At least for me the hooks
 # TODO
 This list is more or less for me, but also for contributors. Generally, the top is a higher priority, but not strictly.
 * @fix :LongStringInput
+* @fix setting data to null
 * :utf8Conversion
+* Improve NULL checking
 * @incomplete POOL_ALLOCATOR_CUTOFF_SIZE. Give user option to change the buffer sizes? :UserOptions
 * @incomplete :SQL_NO_TOTAL
 * @investigate: does execute break when this function is called with context.allocator = temp?
 * parameter counting / checking
-* Improve NULL checking
 * More tests. For all integer types and long binary/strings. And conversions. :IntegerTests :LongStringInput
 
 # License
